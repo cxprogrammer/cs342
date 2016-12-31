@@ -6,11 +6,13 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <time.h>
-
 #include <linux/msdos_fs.h>
 
-#define SECTORSIZE 512   //bytes
-#define BLOCKSIZE  4096  // bytes - do not change this value
+#define DIRECTORYENTITYSIZE 	32	//bytes
+#define SECTORSPERCLUSTER 	8
+#define SECTORSIZE 		512   //bytes
+#define BLOCKSIZE  		4096  // bytes - do not change this value
+#define TO_HEX(i) (i <= 9 ? '0' + i : 'A' - 10 + i)
 
 char diskname[48]; 
 int  disk_fd; 
@@ -47,19 +49,169 @@ void print_sector (unsigned char *s)
 
 /* print the content of the root directory */
 void print_rootdir() {
+
+	get_sector (volumesector, 0); 
+
+	struct fat_boot_sector *bsp; 
+	bsp = (struct fat_boot_sector *) volumesector;
+	
+	/* read the number of sectors per fat at byte 36*/
+	unsigned int sectors_per_fat_length = bsp->fat32.length;
+
+	/* calculate beginning of the root folder boot sec +reserved secs + 2*fat secs*/
+	unsigned int root_folder_begin_sec = 32 + 2*sectors_per_fat_length;
+	
+	printf("Content of the root directory:\n");
+	int i;
+	/* get root sectors and read each root directory entity */
+	for(i = root_folder_begin_sec; i < root_folder_begin_sec + SECTORSPERCLUSTER; i++) {
+		unsigned char sector[SECTORSIZE]; 
+		get_sector(sector, i);
+
+		int entity_per_sector_length = SECTORSIZE / DIRECTORYENTITYSIZE;
+		int j;
+		
+		/* read each directory entity */
+		for(j = 0; j < entity_per_sector_length; j++) {
+			struct msdos_dir_entry *mde;
+			unsigned char entity[DIRECTORYENTITYSIZE]; 
+			int k;
+			/* copy 32 byte entity from root sector*/
+			for(k = 0; k < 32; k++) {
+				entity[k] = sector[j*DIRECTORYENTITYSIZE+k];
+			}
+			mde = (struct msdos_dir_entry *) entity;
+			if(entity[0] == 0)
+				break;
+			/* name of the entity*/ 
+			unsigned char* name = mde->name;
+			/* attribute */
+			unsigned int attribute = mde->attr;
+			/* Creation date */
+			unsigned int creation_date = mde->date;
+			/* Creation time */
+			unsigned int creation_time = mde->time;
+			/* Last access date */
+			unsigned int adate = mde->adate;
+			/* First cluster low bytes */
+			unsigned int cluster_low = mde->start;
+			/* First cluster high bytes*/
+			unsigned int cluster_high = mde->starthi;
+			/* File size  */
+			unsigned int file_size = mde->size;
+			
+			printf("File name: %s, Attribute: %d, Creation date: %d, Creation time: %d, Last access date: %d, File size: %d\n", name, attribute, creation_date, creation_time, adate, 				file_size);
+			
+		}
+	}
 }
 
 /*print the numbers of the clusters allocated to a file*/
 void print_blocks_allocated(char* filename) {
+	get_sector (volumesector, 0); 
+
+	struct fat_boot_sector *bsp; 
+	bsp = (struct fat_boot_sector *) volumesector;
+	
+	/* read the number of sectors per fat at byte 36*/
+	unsigned int sectors_per_fat_length = bsp->fat32.length;
+	
+	/* calculate beginning of the root folder boot sec +reserved secs + 2*fat secs*/
+	unsigned int root_folder_begin_sec = 32 + 2*sectors_per_fat_length;
+	
+	printf("Content of the root directory:\n");
+	int i;
+	/* get root sectors and read each root directory entity */
+	for(i = root_folder_begin_sec; i < root_folder_begin_sec + SECTORSPERCLUSTER; i++) {
+		unsigned char sector[SECTORSIZE]; 
+		get_sector(sector, i);
+
+		int entity_per_sector_length = SECTORSIZE / DIRECTORYENTITYSIZE;
+		int j;
+		
+		/* read each directory entity */
+		for(j = 0; j < entity_per_sector_length; j++) {
+			struct msdos_dir_entry *mde;
+			unsigned char entity[DIRECTORYENTITYSIZE]; 
+			int k;
+			/* copy 32 byte entity from root sector*/
+			for(k = 0; k < DIRECTORYENTITYSIZE; k++) {
+				entity[k] = sector[j*DIRECTORYENTITYSIZE+k];
+			}
+			mde = (struct msdos_dir_entry *) entity;
+			if(entity[0] == 0)
+				break;
+			/* name of the entity*/ 
+			unsigned char* name = mde->name;
+			if(!strcmp(name,filename)) {
+				/* First cluster low bytes */
+				unsigned int cluster_low = mde->start;
+				/* First cluster high bytes*/
+				unsigned int cluster_high = mde->starthi;
+				
+				int x = cluster_low;
+				int y = cluster_high;
+				/* 32 bit cluster number */
+				char res[9];
+				res[0] = TO_HEX(((y & 0xF000) >> 12));   
+				res[1] = TO_HEX(((y & 0x0F00) >> 8));
+				res[2] = TO_HEX(((y & 0x00F0) >> 4));
+				res[3] = TO_HEX((y & 0x000F));
+				sprintf(&res[4],"%04x",x);
+				int cluster_no;
+				sscanf(res,"%x",&cluster_no);
+				/* lookup FAT by comparing both for inconsistency*/
+				do {
+					/* get the starting file sector*/
+					int start_sect_no1 = 32 + (cluster_no*4) / SECTORSIZE;
+					int start_sect_no2 = 32 + sectors_per_fat_length + (cluster_no*4) / SECTORSIZE;
+
+					unsigned char fat1Sector[SECTORSIZE]; 
+					unsigned char fat2Sector[SECTORSIZE]; 
+					get_sector(fat1Sector, start_sect_no1);
+					get_sector(fat2Sector, start_sect_no2);
+					int start_offset = (cluster_no*4) % SECTORSIZE + 12;
+					int firstlowbyte = fat1Sector[start_offset];
+					int secondlowbyte =fat1Sector[start_offset+1];
+					int thirdlowbyte =fat1Sector[start_offset+2];
+					int highestbyte =fat1Sector[start_offset+3];
+					x = firstlowbyte;
+					y = secondlowbyte;
+					z = thirdlowbyte;
+					t = highestbyte;
+					char res[9];
+					res[0] = TO_HEX(((t & 0xF0) >> 4));   
+					res[1] = TO_HEX(((t & 0x0F)));
+					res[2] = TO_HEX(((z & 0xF0) >> 4));   
+					res[3] = TO_HEX(((z & 0x0F)));
+					res[4] = TO_HEX(((y & 0xF0) >> 4));   
+					res[5] = TO_HEX(((y & 0x0F)));
+					sprintf(&res[6],"%02x",x);
+					int merge;
+					sscanf(res,"%x",&merge);
+					cluster_no = merge;
+				}
+				while(cluster_no !=) 
+				
+			}
+			
+		}
+	}
 }
 
 void delete_file(char* filename) {
-
+	/*delete for both FAT*/
 }
 
-int 
-main(int argc, char *argv[])
+void print_volume_sector() {
+	get_sector (volumesector, 0); 
+	printf ("volume sector retrieved\n"); 
+	print_sector(volumesector); 
+}
+
+int main(int argc, char *argv[])
 {
+
 	if (argc < 2) {
 		printf ("wrong usage\n"); 
 		exit (1); 
@@ -72,27 +224,10 @@ main(int argc, char *argv[])
 		printf ("could not open the disk image\n"); 
 		exit (1); 
 	}
-
-	get_sector (volumesector, 0); 
-	printf ("volume sector retrieved\n"); 
-
-	print_sector(volumesector); 
-	struct fat_boot_sector *bsp; 
-	bsp = (struct fat_boot_sector *) volumesector;
+	get_sector(volumesector,0);
 	
-	/* read the number of sectors per fat at byte 36*/
-	unsigned int sectors_per_fat_length = bsp->fat32.length;
-	printf("sectors per fat length:%u\n", sectors_per_fat_length);
+	print_rootdir();
 
-	/* calculate beginning of the root folder boot sec +reserved secs + 2*fat secs*/
-	unsigned int root_folder_begin_sec = 32 + 2*sectors_per_fat_length;
-
-	/* read each root directory entity */
-
-	/*beginning sector of fat1*/
-	unsigned char fat1beginning[SECTORSIZE]; 
-	get_sector (fat1beginning, 33); 
-	
 	close (disk_fd); 
 
 	return (0); 
