@@ -15,6 +15,7 @@
 #define BLOCKSIZE  		4096  // bytes - do not change this value
 #define TO_HEX(i) (i <= 9 ? '0' + i : 'A' - 10 + i)
 #define MAXFILENAMELENGTH	20
+
 char diskname[48]; 
 int  disk_fd; 
 
@@ -71,11 +72,11 @@ void print_rootdir() {
 	struct fat_boot_sector *bsp; 
 	bsp = (struct fat_boot_sector *) volumesector;
 	
-	/* read the number of sectors per fat at byte 36*/
+	/* read the number of sectors per fat at byte 36 */
 	unsigned int sectors_per_fat_length = bsp->fat32.length;
 
 	/* calculate beginning of the root folder boot sec +reserved secs + 2*fat secs*/
-	unsigned int root_folder_begin_sec = 32 + 2*sectors_per_fat_length;
+	unsigned int root_folder_begin_sec = 32 + 2 * sectors_per_fat_length;
 	
 	printf("Content of the root directory:\n");
 	int i;
@@ -92,11 +93,13 @@ void print_rootdir() {
 			struct msdos_dir_entry *mde;
 			unsigned char entity[DIRECTORYENTITYSIZE]; 
 			int k;
-			/* copy 32 byte entity from root sector*/
+			/* get 32 byte entity from root sector*/
 			for(k = 0; k < 32; k++) {
 				entity[k] = sector[j*DIRECTORYENTITYSIZE+k];
 			}
 			mde = (struct msdos_dir_entry *) entity;
+
+			/* if entity is free skip it */
 			if(entity[0] == 0)
 				continue;
 			/* name of the entity*/ 
@@ -104,9 +107,9 @@ void print_rootdir() {
 			/* attribute */
 			unsigned int attribute = mde->attr;
 			/* Creation date */
-			unsigned int creation_date = mde->date;
+			unsigned int creation_date = mde->cdate;
 			/* Creation time */
-			unsigned int creation_time = mde->time;
+			unsigned int creation_time = mde->ctime;
 			/* Last access date */
 			unsigned int adate = mde->adate;
 			/* First cluster low bytes */
@@ -116,8 +119,29 @@ void print_rootdir() {
 			/* File size  */
 			unsigned int file_size = mde->size;
 			
-			printf("File name: %s, Attribute: %d, Creation date: %d, Creation time: %d, Last access date: %d, File size: %d\n", name, attribute, creation_date, creation_time, adate, 				file_size);
-			
+			/* format file name*/
+			char *namec = (char*)name;
+			char *token = strtok(namec," ");
+			char* cfilename = malloc(sizeof(token));
+			char* extension;
+			strcpy(cfilename,token);
+			if(token!=NULL) {
+				token = strtok(NULL," ");
+				extension = malloc(sizeof(token));
+				strcpy(extension,token);
+			}
+
+			char* name_with_extension;
+			char dot[] =".";
+			name_with_extension = malloc(strlen(cfilename)+2+strlen(extension)); 
+			strcpy(name_with_extension, cfilename); 
+			strcat(name_with_extension, dot); 
+			strcat(name_with_extension, extension);
+			free(cfilename);
+			free(extension);
+
+			printf("File name: %s, Attribute: %d, Creation date: %d, Creation time: %d, Last access date: %d, File size: %d\n", name_with_extension, attribute, creation_date, 				creation_time, adate, 	file_size);
+			free(name_with_extension);
 		}
 	}
 }
@@ -135,7 +159,6 @@ void print_blocks_allocated(char* filename) {
 	/* calculate beginning of the root folder boot sec +reserved secs + 2*fat secs*/
 	unsigned int root_folder_begin_sec = 32 + 2*sectors_per_fat_length;
 	
-	printf("\nBlocks allocated:\n");
 	int count = 0;
 	int i;
 	/* get root sectors and read each root directory entity */
@@ -177,7 +200,12 @@ void print_blocks_allocated(char* filename) {
 			strcpy(name_with_extension, cfilename); 
 			strcat(name_with_extension, dot); 
 			strcat(name_with_extension, extension);
+			free(cfilename);
+			free(extension);
+			
 			if(!strcasecmp(name_with_extension, filename)) {
+				
+				printf("\nBlocks allocated:\n");
 				/* First cluster low bytes */
 				unsigned int cluster_low = mde->start;
 				/* First cluster high bytes*/
@@ -232,13 +260,14 @@ void print_blocks_allocated(char* filename) {
 					}
 					while(cluster_no != 268435455) ;
 					
-					printf("%d)Cluster no:%d\n",count,cluster_no);
+					printf("%d)Cluster no:%d end of the file\n",count,cluster_no);
 					printf("The numbers of the clusters allocated to file %s is %d\n", name_with_extension,count);
 					
 				}
+				free(name_with_extension);
 				break;
-				
 			}
+			free(name_with_extension);
 			
 		}
 	}
@@ -257,9 +286,9 @@ void delete_file(char* filename) {
 	/* calculate beginning of the root folder boot sec +reserved secs + 2*fat secs*/
 	unsigned int root_folder_begin_sec = 32 + 2*sectors_per_fat_length;
 	
-	printf("Blocks allocated:\n");
 	int count = 0;
 	int i;
+	int deleted = 0;
 	/* get root sectors and read each root directory entity */
 	for(i = root_folder_begin_sec; i < root_folder_begin_sec + SECTORSPERCLUSTER; i++) {
 		unsigned char sector[SECTORSIZE]; 
@@ -299,8 +328,10 @@ void delete_file(char* filename) {
 			strcpy(name_with_extension, cfilename); 
 			strcat(name_with_extension, dot); 
 			strcat(name_with_extension, extension);
-			
+			free(cfilename);
+			free(extension);
 			if(!strcasecmp(name_with_extension, filename)) {
+				
 				/*remove the file from the directory*/
 				for(k = 0; k < DIRECTORYENTITYSIZE; k++) {
 					sector[j*DIRECTORYENTITYSIZE+k] = 0;
@@ -371,24 +402,47 @@ void delete_file(char* filename) {
 					
 				}
 				printf("File %s successfully deleted\n", name_with_extension);
-
+				deleted = 1;
+				free(name_with_extension);
 				break;
-				
 			}
-			
+			free(name_with_extension);
 			
 		}
 	}
+	if(!deleted)
+		printf("No file named %s \n", filename);
 }
 
 void print_volume_info() {
+	
 	get_sector (volumesector, 0); 
 	struct fat_boot_sector *bsp; 
 	bsp = (struct fat_boot_sector *) volumesector;
 	
-	/* read the number of sectors per fat at byte 36*/
-	unsigned int sectors_per_fat_length = bsp->fat32.length;
+	unsigned int sectors_per_fat_length = bsp->fat32.length;/* sectors/FAT */
+	unsigned int number_of_fats = bsp->fats;/* number of FATs */
+	unsigned int reserved_sectors = bsp->reserved;/* reserved sectors */
+	unsigned char* system_id = bsp->system_id;/* Name - can be used to special case
+				   partition manager volumes */
+	unsigned char* vol_id = bsp->fat32.vol_id;/* volume ID */
+	unsigned char* vol_label = bsp->fat32.vol_label;/* volume label */
+	unsigned char* file_system_type = bsp->fat32.fs_type;/* file system type */
+	unsigned int media = bsp->media;/* media code*/
+	unsigned int sec_per_clus = bsp->sec_per_clus;/* sectors/cluster */
+	unsigned int root_cluster = bsp->fat32.root_cluster;/* first cluster in
+						   root directory */
+	printf("The number of sectors per fat:%d\n",sectors_per_fat_length);
+	printf("The number of fats:%d\n",number_of_fats);
+	printf("The number of reserved sectors:%d\n",reserved_sectors);
+	printf("System id:%s\n",system_id);
+	printf("Volume label:%s\n",vol_label);
+	printf("Volume id:%s\n",vol_id);
+	printf("File system type:%s\n",file_system_type);
 	
+	printf("Media code:%d\n",media);
+	printf("The number of sectors per cluster:%d\n",sec_per_clus);
+	printf("First cluster in root directory:%d\n",root_cluster);
 }
 
 
@@ -412,21 +466,21 @@ int main(int argc, char *argv[])
 	strcpy (choice, argv[2]);
 	char choice2[40];
 	strcpy (choice2, argv[3]);
-
-	if(strcmp(choice,"-p")) {
-		if(strcmp(choice2,"volumeinfo")) {
+	if(!strcmp(choice,"-p")) {
+		if(!strcmp(choice2,"volumeinfo")) {
 			print_volume_info();
+
 		}
-		else if(strcmp(choice2,"rootdir")) {
+		else if(!strcmp(choice2,"rootdir")) {
 			print_rootdir();
 		}
-		else if(strcmp(choice2,"blocks")) {
+		else if(!strcmp(choice2,"blocks")) {
 			char choice3[40]; 
 			strcpy (choice3, argv[4]);
 			print_blocks_allocated(choice3);
 		}
 	}
-	else if(strcmp(choice,"-d")) {
+	else if(!strcmp(choice,"-d")) {
 		delete_file(choice2);
 	}
 	
