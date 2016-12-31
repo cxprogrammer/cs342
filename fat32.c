@@ -13,7 +13,7 @@
 #define SECTORSIZE 		512   //bytes
 #define BLOCKSIZE  		4096  // bytes - do not change this value
 #define TO_HEX(i) (i <= 9 ? '0' + i : 'A' - 10 + i)
-
+#define MAXFILENAMELENGTH	20
 char diskname[48]; 
 int  disk_fd; 
 
@@ -119,7 +119,8 @@ void print_blocks_allocated(char* filename) {
 	/* calculate beginning of the root folder boot sec +reserved secs + 2*fat secs*/
 	unsigned int root_folder_begin_sec = 32 + 2*sectors_per_fat_length;
 	
-	printf("Content of the root directory:\n");
+	printf("Blocks allocated:\n");
+	int count = 0;
 	int i;
 	/* get root sectors and read each root directory entity */
 	for(i = root_folder_begin_sec; i < root_folder_begin_sec + SECTORSPERCLUSTER; i++) {
@@ -143,7 +144,9 @@ void print_blocks_allocated(char* filename) {
 				break;
 			/* name of the entity*/ 
 			unsigned char* name = mde->name;
-			if(!strcmp(name,filename)) {
+			char *namec = (char*)name;
+			printf("name:%s \n",namec);
+			if(!strcmp(namec, filename)) {
 				/* First cluster low bytes */
 				unsigned int cluster_low = mde->start;
 				/* First cluster high bytes*/
@@ -160,38 +163,51 @@ void print_blocks_allocated(char* filename) {
 				sprintf(&res[4],"%04x",x);
 				int cluster_no;
 				sscanf(res,"%x",&cluster_no);
-				/* lookup FAT by comparing both for inconsistency*/
-				do {
-					/* get the starting file sector*/
-					int start_sect_no1 = 32 + (cluster_no*4) / SECTORSIZE;
-					int start_sect_no2 = 32 + sectors_per_fat_length + (cluster_no*4) / SECTORSIZE;
+				if(cluster_no != 0 && cluster_no!=1) {
+					count++;
+					/* lookup FAT by comparing both for inconsistency*/
+					do {
 
-					unsigned char fat1Sector[SECTORSIZE]; 
-					unsigned char fat2Sector[SECTORSIZE]; 
-					get_sector(fat1Sector, start_sect_no1);
-					get_sector(fat2Sector, start_sect_no2);
-					int start_offset = (cluster_no*4) % SECTORSIZE + 12;
-					int firstlowbyte = fat1Sector[start_offset];
-					int secondlowbyte =fat1Sector[start_offset+1];
-					int thirdlowbyte =fat1Sector[start_offset+2];
-					int highestbyte =fat1Sector[start_offset+3];
-					x = firstlowbyte;
-					y = secondlowbyte;
-					z = thirdlowbyte;
-					t = highestbyte;
-					char res[9];
-					res[0] = TO_HEX(((t & 0xF0) >> 4));   
-					res[1] = TO_HEX(((t & 0x0F)));
-					res[2] = TO_HEX(((z & 0xF0) >> 4));   
-					res[3] = TO_HEX(((z & 0x0F)));
-					res[4] = TO_HEX(((y & 0xF0) >> 4));   
-					res[5] = TO_HEX(((y & 0x0F)));
-					sprintf(&res[6],"%02x",x);
-					int merge;
-					sscanf(res,"%x",&merge);
-					cluster_no = merge;
+						printf("%d)Cluster no:%d\n",count,cluster_no);
+						/* get the starting file sector*/
+						int start_sect_no1 = 32 + (cluster_no*4) / SECTORSIZE;
+						int start_sect_no2 = 32 + sectors_per_fat_length + (cluster_no*4) / SECTORSIZE;
+
+						unsigned char fat1Sector[SECTORSIZE]; 
+						unsigned char fat2Sector[SECTORSIZE]; 
+						get_sector(fat1Sector, start_sect_no1);
+						get_sector(fat2Sector, start_sect_no2);
+						int start_offset = (cluster_no*4) % SECTORSIZE;
+						int firstlowbyte = fat1Sector[start_offset];
+						int secondlowbyte =fat1Sector[start_offset+1];
+						int thirdlowbyte =fat1Sector[start_offset+2];
+						int highestbyte =fat1Sector[start_offset+3];
+						x = firstlowbyte;
+						y = secondlowbyte;
+						int z = thirdlowbyte;
+						int t = highestbyte;
+						char res[9];
+						res[0] = TO_HEX(((t & 0xF0) >> 4));   
+						res[1] = TO_HEX(((t & 0x0F)));
+						res[2] = TO_HEX(((z & 0xF0) >> 4));   
+						res[3] = TO_HEX(((z & 0x0F)));
+						res[4] = TO_HEX(((y & 0xF0) >> 4));   
+						res[5] = TO_HEX(((y & 0x0F)));
+						sprintf(&res[6],"%02x",x);
+						int merge;
+						sscanf(res,"%x",&merge);
+						cluster_no = merge;
+						count++;
+					}
+					while(cluster_no != 268435455) ;
+					
+					printf("%d)Cluster no:%d\n",count,cluster_no);
+					printf("The numbers of the clusters allocated to file %s is %d\n", name,count);
+					break;
 				}
-				while(cluster_no !=) 
+				else{
+					printf("The numbers of the clusters allocated to file %s is %d\n", name,count);
+				}
 				
 			}
 			
@@ -201,6 +217,111 @@ void print_blocks_allocated(char* filename) {
 
 void delete_file(char* filename) {
 	/*delete for both FAT*/
+	get_sector (volumesector, 0); 
+
+	struct fat_boot_sector *bsp; 
+	bsp = (struct fat_boot_sector *) volumesector;
+	
+	/* read the number of sectors per fat at byte 36*/
+	unsigned int sectors_per_fat_length = bsp->fat32.length;
+	
+	/* calculate beginning of the root folder boot sec +reserved secs + 2*fat secs*/
+	unsigned int root_folder_begin_sec = 32 + 2*sectors_per_fat_length;
+	
+	printf("Blocks allocated:\n");
+	int count = 0;
+	int i;
+	/* get root sectors and read each root directory entity */
+	for(i = root_folder_begin_sec; i < root_folder_begin_sec + SECTORSPERCLUSTER; i++) {
+		unsigned char sector[SECTORSIZE]; 
+		get_sector(sector, i);
+
+		int entity_per_sector_length = SECTORSIZE / DIRECTORYENTITYSIZE;
+		int j;
+		
+		/* read each directory entity */
+		for(j = 0; j < entity_per_sector_length; j++) {
+			struct msdos_dir_entry *mde;
+			unsigned char entity[DIRECTORYENTITYSIZE]; 
+			int k;
+			/* copy 32 byte entity from root sector*/
+			for(k = 0; k < DIRECTORYENTITYSIZE; k++) {
+				entity[k] = sector[j*DIRECTORYENTITYSIZE+k];
+			}
+			mde = (struct msdos_dir_entry *) entity;
+			if(entity[0] == 0)
+				break;
+			/* name of the entity*/ 
+			unsigned char* name = mde->name;
+			char *namec = (char*)name;
+			printf("name:%s \n",namec);
+			if(!strcmp(namec, filename)) {
+				/* First cluster low bytes */
+				unsigned int cluster_low = mde->start;
+				/* First cluster high bytes*/
+				unsigned int cluster_high = mde->starthi;
+				
+				int x = cluster_low;
+				int y = cluster_high;
+				/* 32 bit cluster number */
+				char res[9];
+				res[0] = TO_HEX(((y & 0xF000) >> 12));   
+				res[1] = TO_HEX(((y & 0x0F00) >> 8));
+				res[2] = TO_HEX(((y & 0x00F0) >> 4));
+				res[3] = TO_HEX((y & 0x000F));
+				sprintf(&res[4],"%04x",x);
+				int cluster_no;
+				sscanf(res,"%x",&cluster_no);
+				if(cluster_no != 0 && cluster_no!=1) {
+					count++;
+					/* lookup FAT by comparing both for inconsistency*/
+					do {
+
+						printf("%d)Cluster no:%d\n",count,cluster_no);
+						/* get the starting file sector*/
+						int start_sect_no1 = 32 + (cluster_no*4) / SECTORSIZE;
+						int start_sect_no2 = 32 + sectors_per_fat_length + (cluster_no*4) / SECTORSIZE;
+
+						unsigned char fat1Sector[SECTORSIZE]; 
+						unsigned char fat2Sector[SECTORSIZE]; 
+						get_sector(fat1Sector, start_sect_no1);
+						get_sector(fat2Sector, start_sect_no2);
+						int start_offset = (cluster_no*4) % SECTORSIZE;
+						int firstlowbyte = fat1Sector[start_offset];
+						int secondlowbyte =fat1Sector[start_offset+1];
+						int thirdlowbyte =fat1Sector[start_offset+2];
+						int highestbyte =fat1Sector[start_offset+3];
+						x = firstlowbyte;
+						y = secondlowbyte;
+						int z = thirdlowbyte;
+						int t = highestbyte;
+						char res[9];
+						res[0] = TO_HEX(((t & 0xF0) >> 4));   
+						res[1] = TO_HEX(((t & 0x0F)));
+						res[2] = TO_HEX(((z & 0xF0) >> 4));   
+						res[3] = TO_HEX(((z & 0x0F)));
+						res[4] = TO_HEX(((y & 0xF0) >> 4));   
+						res[5] = TO_HEX(((y & 0x0F)));
+						sprintf(&res[6],"%02x",x);
+						int merge;
+						sscanf(res,"%x",&merge);
+						cluster_no = merge;
+						count++;
+					}
+					while(cluster_no != 268435455) ;
+					
+					printf("%d)Cluster no:%d\n",count,cluster_no);
+					printf("The numbers of the clusters allocated to file %s is %d\n", name,count);
+					break;
+				}
+				else{
+					printf("The numbers of the clusters allocated to file %s is %d\n", name,count);
+				}
+				
+			}
+			
+		}
+	}
 }
 
 void print_volume_sector() {
@@ -227,7 +348,7 @@ int main(int argc, char *argv[])
 	get_sector(volumesector,0);
 	
 	print_rootdir();
-
+	print_blocks_allocated("EAZ03   BIN ");
 	close (disk_fd); 
 
 	return (0); 
